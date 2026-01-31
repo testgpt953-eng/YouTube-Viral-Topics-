@@ -10,18 +10,21 @@ YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEO_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_CHANNEL_URL = "https://www.googleapis.com/youtube/v3/channels"
 
-# Language mapping (Display Name -> YouTube Language Code)
+# Language mapping (ISO 639-1 codes)
 LANGUAGE_OPTIONS = {
-    "🇺🇸 English": "en",
-    "🇪🇸 Spanish (Español)": "es",
-    "🇫🇷 French (Français)": "fr",
-    "🇩🇪 German (Deutsch)": "de",
-    "🇵🇹 Portuguese (Português)": "pt",
-    "🇮🇹 Italian (Italiano)": "it",
-    "🇯🇵 Japanese (日本語)": "ja",
-    "🇰🇷 Korean (한국어)": "ko",
-    "🇮🇳 Hindi (हिन्दी)": "hi",
-    "🇨🇳 Chinese (中文)": "zh"
+    "English": "en",
+    "Spanish": "es",
+    "Hindi": "hi",
+    "Arabic": "ar",
+    "Portuguese": "pt",
+    "Any Language": ""  # Empty = no language filter
+}
+
+# Video duration mapping
+VIDEO_DURATION_OPTIONS = {
+    "Long Videos (Landscape)": "long",     # > 20 minutes
+    "Short Videos (Shorts)": "short",      # < 4 minutes
+    "Both (Long & Shorts)": "any"          # No filter
 }
 
 # Function to generate relevant keywords from niche
@@ -46,6 +49,36 @@ def generate_keywords_from_niche(niche):
     ]
     
     return base_keywords + modifiers
+
+# Function to check if video is a Short (based on duration)
+def is_short_video(duration_seconds):
+    """
+    YouTube Shorts are typically < 60 seconds
+    """
+    return duration_seconds <= 60
+
+# Function to parse ISO 8601 duration to seconds
+def parse_duration(duration_iso):
+    """
+    Convert ISO 8601 duration (e.g., PT1M30S) to seconds
+    """
+    import re
+    
+    if not duration_iso:
+        return 0
+    
+    # Pattern to match ISO 8601 duration
+    pattern = re.compile(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?')
+    match = pattern.match(duration_iso)
+    
+    if not match:
+        return 0
+    
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+    
+    return hours * 3600 + minutes * 60 + seconds
 
 # Streamlit App Title
 st.title("🔥 YouTube Niche Analyzer & Trending Finder")
@@ -81,6 +114,14 @@ with col1:
         max_value=30,
         value=7
     )
+    
+    # 6) Language Selection (NEW)
+    selected_language = st.selectbox(
+        "6️⃣ Select Language:",
+        options=list(LANGUAGE_OPTIONS.keys()),
+        index=0,  # Default to English
+        help="Filter videos by language"
+    )
 
 with col2:
     # 4) Number of top channels
@@ -99,16 +140,13 @@ with col2:
         value=10
     )
     
-    # 6) Language Selection (NEW!)
-    selected_language_display = st.selectbox(
-        "6️⃣ Select Language:",
-        options=list(LANGUAGE_OPTIONS.keys()),
-        index=0,  # Default to English
-        help="Filter videos by language"
+    # 7) Video Format Selection (NEW)
+    video_format = st.selectbox(
+        "7️⃣ Video Format:",
+        options=list(VIDEO_DURATION_OPTIONS.keys()),
+        index=2,  # Default to "Both"
+        help="Choose between long videos, shorts, or both"
     )
-
-# Get the language code for API
-selected_language_code = LANGUAGE_OPTIONS[selected_language_display]
 
 # Advanced options (collapsible)
 with st.expander("⚙️ Advanced Options"):
@@ -128,13 +166,18 @@ if st.button("🚀 Analyze Niche", type="primary"):
         st.error("❌ Please enter a niche/category name!")
     else:
         try:
-            with st.spinner(f"🔍 Analyzing '{niche_name}' niche in {selected_language_display}..."):
+            with st.spinner(f"🔍 Analyzing '{niche_name}' niche..."):
+                
+                # Get language code
+                language_code = LANGUAGE_OPTIONS[selected_language]
+                
+                # Get video duration filter
+                duration_filter = VIDEO_DURATION_OPTIONS[video_format]
                 
                 # Generate keywords automatically
                 keywords = generate_keywords_from_niche(niche_name.strip())
                 
-                st.info(f"🎯 Generated {len(keywords)} search keywords from niche: {niche_name}")
-                st.info(f"🌍 Searching in language: {selected_language_display}")
+                st.info(f"🎯 Generated {len(keywords)} search keywords | Language: {selected_language} | Format: {video_format}")
                 with st.expander("View Generated Keywords"):
                     st.write(", ".join(keywords))
                 
@@ -153,7 +196,7 @@ if st.button("🚀 Analyze Niche", type="primary"):
                     status_text.text(f"Searching: {keyword} ({idx+1}/{len(keywords)})")
                     progress_bar.progress((idx + 1) / len(keywords))
                     
-                    # Search parameters (WITH LANGUAGE FILTER)
+                    # Search parameters
                     search_params = {
                         "part": "snippet",
                         "q": keyword,
@@ -161,9 +204,16 @@ if st.button("🚀 Analyze Niche", type="primary"):
                         "order": "viewCount",
                         "publishedAfter": start_date,
                         "maxResults": search_depth,
-                        "relevanceLanguage": selected_language_code,  # ✅ LANGUAGE FILTER
                         "key": API_KEY,
                     }
+                    
+                    # Add language filter if selected
+                    if language_code:
+                        search_params["relevanceLanguage"] = language_code
+                    
+                    # Add video duration filter if not "Both"
+                    if duration_filter != "any":
+                        search_params["videoDuration"] = duration_filter
                     
                     # Fetch video data
                     response = requests.get(YOUTUBE_SEARCH_URL, params=search_params)
@@ -183,18 +233,29 @@ if st.button("🚀 Analyze Niche", type="primary"):
                     if not video_ids:
                         continue
                     
-                    # Fetch video statistics
-                    stats_params = {"part": "statistics", "id": ",".join(video_ids), "key": API_KEY}
+                    # Fetch video statistics AND contentDetails (for duration)
+                    stats_params = {
+                        "part": "statistics,contentDetails",  # Added contentDetails
+                        "id": ",".join(video_ids),
+                        "key": API_KEY
+                    }
                     stats_response = requests.get(YOUTUBE_VIDEO_URL, params=stats_params)
                     stats_data = stats_response.json()
                     
                     if "items" not in stats_data:
                         continue
                     
-                    video_stats_map = {
-                        item["id"]: item["statistics"]
-                        for item in stats_data["items"]
-                    }
+                    # Build video stats map with duration
+                    video_stats_map = {}
+                    for item in stats_data["items"]:
+                        video_id = item["id"]
+                        duration_iso = item.get("contentDetails", {}).get("duration", "")
+                        duration_seconds = parse_duration(duration_iso)
+                        
+                        video_stats_map[video_id] = {
+                            "statistics": item.get("statistics", {}),
+                            "duration_seconds": duration_seconds
+                        }
                     
                     # Get unique channel IDs
                     channel_ids = list(set([
@@ -205,7 +266,7 @@ if st.button("🚀 Analyze Niche", type="primary"):
                     
                     # Fetch channel statistics (including channel name)
                     channel_params = {
-                        "part": "statistics,snippet",  # Added snippet to get channel name
+                        "part": "statistics,snippet",
                         "id": ",".join(channel_ids),
                         "key": API_KEY
                     }
@@ -244,14 +305,32 @@ if st.button("🚀 Analyze Niche", type="primary"):
                         if subs >= int(subscriber_limit):
                             continue
                         
+                        # Get video stats and duration
+                        video_stats = video_stats_map.get(video_id, {})
+                        duration_seconds = video_stats.get("duration_seconds", 0)
+                        
+                        # Additional filtering for Shorts (if "Short Videos" selected)
+                        # This is backup check in case API filter didn't work perfectly
+                        if video_format == "Short Videos (Shorts)":
+                            if not is_short_video(duration_seconds):
+                                continue
+                        elif video_format == "Long Videos (Landscape)":
+                            if is_short_video(duration_seconds):
+                                continue
+                        
                         title = video["snippet"].get("title", "N/A")
                         channel_name = video["snippet"].get("channelTitle", "Unknown")
                         description = video["snippet"].get("description", "")[:150]
                         video_url = f"https://www.youtube.com/watch?v={video_id}"
                         thumbnail = video["snippet"]["thumbnails"].get("high", {}).get("url", "")
                         
-                        views = int(video_stats_map.get(video_id, {}).get("viewCount", 0))
-                        likes = int(video_stats_map.get(video_id, {}).get("likeCount", 0))
+                        views = int(video_stats.get("statistics", {}).get("viewCount", 0))
+                        likes = int(video_stats.get("statistics", {}).get("likeCount", 0))
+                        
+                        # Format duration for display
+                        minutes = duration_seconds // 60
+                        seconds = duration_seconds % 60
+                        duration_display = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
                         
                         # Update channel aggregate data
                         channel_data_map[channel_id]["total_views"] += views
@@ -267,6 +346,8 @@ if st.button("🚀 Analyze Niche", type="primary"):
                             "channel_name": channel_name,
                             "channel_id": channel_id,
                             "subs": subs,
+                            "duration": duration_display,
+                            "is_short": is_short_video(duration_seconds)
                         })
                 
                 progress_bar.empty()
@@ -275,9 +356,9 @@ if st.button("🚀 Analyze Niche", type="primary"):
                 # ========== PROCESS RESULTS ==========
                 
                 if not all_videos:
-                    st.warning(f"❌ No videos found in '{niche_name}' niche with fewer than {subscriber_limit:,} subscribers in {selected_language_display}.")
+                    st.warning(f"❌ No videos found in '{niche_name}' niche with selected filters.")
                 else:
-                    st.success(f"✅ Found {len(all_videos)} videos from {len(channel_data_map)} channels in {selected_language_display}!")
+                    st.success(f"✅ Found {len(all_videos)} videos from {len(channel_data_map)} channels!")
                     
                     # ========== OUTPUT 1: TOP CHANNELS ==========
                     st.header("🏆 Top Trending Channels in This Niche")
@@ -323,6 +404,14 @@ if st.button("🚀 Analyze Niche", type="primary"):
                             st.markdown(f"### #{rank}")
                             st.metric("Views", f"{video['views']:,}")
                             st.metric("Likes", f"{video['likes']:,}")
+                            
+                            # Show video type badge
+                            if video["is_short"]:
+                                st.markdown("🎬 **Short Video**")
+                            else:
+                                st.markdown("📺 **Long Video**")
+                            
+                            st.caption(f"Duration: {video['duration']}")
                         
                         st.markdown(f"### [{video['title']}]({video['url']})")
                         st.markdown(f"**📺 Channel:** {video['channel_name']} ({video['subs']:,} subs)")
@@ -334,14 +423,15 @@ if st.button("🚀 Analyze Niche", type="primary"):
                     st.header("💾 Export Data")
                     
                     # Prepare CSV data
-                    csv_data = "Rank,Title,Channel,Subscribers,Views,Likes,URL\n"
+                    csv_data = "Rank,Title,Channel,Subscribers,Views,Likes,Duration,Type,URL\n"
                     for rank, video in enumerate(top_videos, 1):
-                        csv_data += f"{rank},\"{video['title']}\",{video['channel_name']},{video['subs']},{video['views']},{video['likes']},{video['url']}\n"
+                        video_type = "Short" if video["is_short"] else "Long"
+                        csv_data += f"{rank},\"{video['title']}\",{video['channel_name']},{video['subs']},{video['views']},{video['likes']},{video['duration']},{video_type},{video['url']}\n"
                     
                     st.download_button(
                         label="📥 Download Trending Titles as CSV",
                         data=csv_data,
-                        file_name=f"{niche_name}_{selected_language_code}_trending_titles.csv",
+                        file_name=f"{niche_name}_{selected_language}_{video_format}_trending.csv",
                         mime="text/csv"
                     )
         

@@ -10,6 +10,20 @@ YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEO_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_CHANNEL_URL = "https://www.googleapis.com/youtube/v3/channels"
 
+# Language mapping (Display Name -> YouTube Language Code)
+LANGUAGE_OPTIONS = {
+    "🇺🇸 English": "en",
+    "🇪🇸 Spanish (Español)": "es",
+    "🇫🇷 French (Français)": "fr",
+    "🇩🇪 German (Deutsch)": "de",
+    "🇵🇹 Portuguese (Português)": "pt",
+    "🇮🇹 Italian (Italiano)": "it",
+    "🇯🇵 Japanese (日本語)": "ja",
+    "🇰🇷 Korean (한국어)": "ko",
+    "🇮🇳 Hindi (हिन्दी)": "hi",
+    "🇨🇳 Chinese (中文)": "zh"
+}
+
 # Function to generate relevant keywords from niche
 def generate_keywords_from_niche(niche):
     """
@@ -84,6 +98,17 @@ with col2:
         max_value=50,
         value=10
     )
+    
+    # 6) Language Selection (NEW!)
+    selected_language_display = st.selectbox(
+        "6️⃣ Select Language:",
+        options=list(LANGUAGE_OPTIONS.keys()),
+        index=0,  # Default to English
+        help="Filter videos by language"
+    )
+
+# Get the language code for API
+selected_language_code = LANGUAGE_OPTIONS[selected_language_display]
 
 # Advanced options (collapsible)
 with st.expander("⚙️ Advanced Options"):
@@ -103,12 +128,13 @@ if st.button("🚀 Analyze Niche", type="primary"):
         st.error("❌ Please enter a niche/category name!")
     else:
         try:
-            with st.spinner(f"🔍 Analyzing '{niche_name}' niche..."):
+            with st.spinner(f"🔍 Analyzing '{niche_name}' niche in {selected_language_display}..."):
                 
                 # Generate keywords automatically
                 keywords = generate_keywords_from_niche(niche_name.strip())
                 
                 st.info(f"🎯 Generated {len(keywords)} search keywords from niche: {niche_name}")
+                st.info(f"🌍 Searching in language: {selected_language_display}")
                 with st.expander("View Generated Keywords"):
                     st.write(", ".join(keywords))
                 
@@ -127,7 +153,7 @@ if st.button("🚀 Analyze Niche", type="primary"):
                     status_text.text(f"Searching: {keyword} ({idx+1}/{len(keywords)})")
                     progress_bar.progress((idx + 1) / len(keywords))
                     
-                    # Search parameters
+                    # Search parameters (WITH LANGUAGE FILTER)
                     search_params = {
                         "part": "snippet",
                         "q": keyword,
@@ -135,6 +161,7 @@ if st.button("🚀 Analyze Niche", type="primary"):
                         "order": "viewCount",
                         "publishedAfter": start_date,
                         "maxResults": search_depth,
+                        "relevanceLanguage": selected_language_code,  # ✅ LANGUAGE FILTER
                         "key": API_KEY,
                     }
                     
@@ -248,9 +275,9 @@ if st.button("🚀 Analyze Niche", type="primary"):
                 # ========== PROCESS RESULTS ==========
                 
                 if not all_videos:
-                    st.warning(f"❌ No videos found in '{niche_name}' niche with fewer than {subscriber_limit:,} subscribers.")
+                    st.warning(f"❌ No videos found in '{niche_name}' niche with fewer than {subscriber_limit:,} subscribers in {selected_language_display}.")
                 else:
-                    st.success(f"✅ Found {len(all_videos)} videos from {len(channel_data_map)} channels!")
+                    st.success(f"✅ Found {len(all_videos)} videos from {len(channel_data_map)} channels in {selected_language_display}!")
                     
                     # ========== OUTPUT 1: TOP CHANNELS ==========
                     st.header("🏆 Top Trending Channels in This Niche")
@@ -314,7 +341,7 @@ if st.button("🚀 Analyze Niche", type="primary"):
                     st.download_button(
                         label="📥 Download Trending Titles as CSV",
                         data=csv_data,
-                        file_name=f"{niche_name}_trending_titles.csv",
+                        file_name=f"{niche_name}_{selected_language_code}_trending_titles.csv",
                         mime="text/csv"
                     )
         
